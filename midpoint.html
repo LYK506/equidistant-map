@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>동일거리(외심/근사) 만남 지점 계산기</title>
+
+  <!-- Leaflet -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #app { height: 100%; display: grid; grid-template-rows: auto 1fr; }
+    #topbar {
+      padding: 10px 12px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+      border-bottom: 1px solid #e6e6e6;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", sans-serif;
+      background: #fff;
+    }
+    #map { height: 100%; }
+    .btn {
+      padding: 8px 10px;
+      border: 1px solid #d6d6d6;
+      border-radius: 10px;
+      background: #fff;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .btn:hover { background: #f6f6f6; }
+    .pill {
+      padding: 6px 10px;
+      border: 1px solid #eee;
+      border-radius: 999px;
+      background: #fafafa;
+      font-size: 13px;
+      color: #222;
+    }
+    #status {
+      flex: 1;
+      min-width: 260px;
+      font-size: 13px;
+      line-height: 1.4;
+      color: #222;
+    }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+    .hint { color: #666; }
+    .sep { width: 1px; height: 28px; background: #eee; margin: 0 4px; }
+    .toggle { display: flex; align-items: center; gap: 8px; }
+    input[type="checkbox"] { transform: scale(1.05); }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <button class="btn" id="btnClear">전체 지우기</button>
+    <button class="btn" id="btnUndo">마지막 점 삭제</button>
+    <div class="sep"></div>
+
+    <div class="toggle">
+      <label class="pill">
+        <input type="checkbox" id="chkRealtime" checked />
+        실시간 계산
+      </label>
+      <label class="pill">
+        <input type="checkbox" id="chkShowCircle" checked />
+        (근사) 원 표시
+      </label>
+      <label class="pill">
+        <input type="checkbox" id="chkShowBisector" checked />
+        2점일 때 수직이등분선 표시
+      </label>
+    </div>
+
+    <div id="status">
+      <div><b>사용법</b>: 지도 클릭으로 점 추가 · 점을 드래그해서 이동 가능 · 점 2개 이상이면 결과 표시</div>
+      <div class="hint">주의: 3점 이상에서 “모든 점과 거리가 완전히 동일한 한 점(외심)”은 보통 존재하지 않아서, 이 도구는 <b>최소제곱으로 가장 비슷한 중심</b>을 계산합니다.</div>
+    </div>
+  </div>
+
+  <div id="map"></div>
+</div>
+
+<script>
+/**
+ * 이 파일 하나로 동작하는 MVP
+ * - Leaflet + OSM 타일
+ * - 지도 클릭으로 점 추가, 마커 드래그 가능
+ * - 점 2개: midpoint + (옵션) 수직이등분선
+ * - 점 3개 이상: 최소제곱 "동일거리 근사 중심" 계산 + (옵션) 근사 원 표시
+ * - 결과: 중심 좌표, 평균 반경, 표준편차(=동일거리 정도) 표시
+ */
+
+/* -----------------------
+   지도 초기화
+------------------------ */
+const map = L.map("map", { zoomControl: true }).setView([37.5665, 126.9780], 12); // 기본: 서울 시청
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19,
+  attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+/* -----------------------
+   상태/옵션
+------------------------ */
+const elStatus = document.getElementById("status");
+const chkRealtime = document.getElementById("chkRealtime");
+const chkShowCircle = document.getElementById("chkShowCircle");
+const chkShowBisector = document.getElementById("chkShowBisector");
+const btnClear = document.getElementById("btnClear");
+const btnUndo = document.getElementById("btnUndo");
+
+/* -----------------------
+   레이어/마커 관리
+------------------------ */
+const pointMarkers = []; // Leaflet markers
+let centerMarker = null;
+let circleLayer = null;
+let bisectorLayer = null;
+let spokesLayer = null; // center-to-points lines
+
+/* -----------------------
+   좌표 변환: lat/lng <-> Web Mercator meters
+   EPSG:3857
+------------------------ */
+const R = 6378137;
+function latLngToXY(lat, lng) {
+  const x = R * (lng * Math.PI / 180);
+  const y = R * Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI / 180) / 2));
+  return { x, y };
+}
+function xyToLatLng(x, y) {
+  const lng = (x / R) * (180 / Math.PI);
+  const lat = (2 * Math.atan(Math.exp(y / R)) - Math.PI / 2) * (180 / Math.PI);
+  return { lat, lng };
+}
+
+/* -----------------------
+   최소제곱 동일거리 중심 계산
+   pointsXY: [{x,y}, ...] (n>=2)
+------------------------ */
+function bestEquidistantCenter(pointsXY) {
+  const n = pointsXY.length;
+  if (n < 2) return null;
+
+  if (n === 2) {
+    const cx = (pointsXY[0].x + pointsXY[1].x) / 2;
+    const cy = (pointsXY[0].y + pointsXY[1].y) / 2;
+    return { cx, cy, ok: true, stats: { type: "midpoint" } };
+  }
+
+  const p1 = pointsXY[0];
+  const x1 = p1.x, y1 = p1.y;
+  const r1sq = x1*x1 + y1*y1;
+
+  // Normal equations components
+  let Sxx = 0, Sxy = 0, Syy = 0;
+  let Tx = 0, Ty = 0;
+
+  for (let i = 1; i < n; i++) {
+    const xi = pointsXY[i].x, yi = pointsXY[i].y;
+    const ax = 2*(xi - x1);
+    const ay = 2*(yi - y1);
+    const bi = (xi*xi + yi*yi) - r1sq;
+
+    Sxx += ax*ax;
+    Sxy += ax*ay;
+    Syy += ay*ay;
+    Tx  += ax*bi;
+    Ty  += ay*bi;
+  }
+
+  const det = Sxx*Syy - Sxy*Sxy;
+  if (Math.abs(det) < 1e-12) {
+    return { cx: null, cy: null, ok: false, stats: { reason: "점들이 거의 일직선(퇴화)이라 중심이 안정적으로 정해지지 않음" } };
+  }
+
+  const invSxx =  Syy / det;
+  const invSxy = -Sxy / det;
+  const invSyy =  Sxx / det;
+
+  const cx = invSxx*Tx + invSxy*Ty;
+  const cy = invSxy*Tx + invSyy*Ty;
+
+  // Evaluate distances
+  const dists = pointsXY.map(p => Math.hypot(p.x - cx, p.y - cy));
+  const mean = dists.reduce((a,b)=>a+b,0)/n;
+  const varr = dists.reduce((a,d)=>a+(d-mean)*(d-mean),0)/n;
+  const std = Math.sqrt(varr);
+  const maxDev = Math.max(...dists.map(d => Math.abs(d-mean)));
+
+  // “거의 동일거리” 임계값: 도시 내 만남지점 기준 10m 정도
+  const almost = std <= 10;
+
+  return { cx, cy, ok: true, stats: { type: almost ? "almost-circumcenter" : "least-squares", mean, std, maxDev } };
+}
+
+/* -----------------------
+   시각화: 중심/원/선/수직이등분선
+------------------------ */
+function clearResultLayers() {
+  if (centerMarker) { map.removeLayer(centerMarker); centerMarker = null; }
+  if (circleLayer)  { map.removeLayer(circleLayer);  circleLayer = null; }
+  if (bisectorLayer){ map.removeLayer(bisectorLayer); bisectorLayer = null; }
+  if (spokesLayer)  { map.removeLayer(spokesLayer);  spokesLayer = null; }
+}
+
+function updateResult() {
+  clearResultLayers();
+
+  const n = pointMarkers.length;
+  if (n < 2) {
+    setStatus(`점 ${n}개. 2개 이상 찍으면 계산 결과가 나옵니다.`);
+    return;
+  }
+
+  // markers -> latlng -> xy
+  const latlngs = pointMarkers.map(m => m.getLatLng());
+  const pointsXY = latlngs.map(ll => latLngToXY(ll.lat, ll.lng));
+
+  const result = bestEquidistantCenter(pointsXY);
+  if (!result || !result.ok) {
+    setStatus(`점 ${n}개. 결과: 계산 실패. 원인: ${result?.stats?.reason ?? "알 수 없음"}`);
+    return;
+  }
+
+  const centerLL = xyToLatLng(result.cx, result.cy);
+
+  // Center marker
+  centerMarker = L.marker([centerLL.lat, centerLL.lng], {
+    draggable: false,
+    title: "계산된 중심"
+  }).addTo(map);
+
+  // Lines from center to points (spokes)
+  spokesLayer = L.polyline(
+    latlngs.map(ll => [ll.lat, ll.lng]),
+    { opacity: 0 } // placeholder; we'll build separate lines group for clarity
+  );
+
+  const lines = latlngs.map(ll =>
+    L.polyline([[centerLL.lat, centerLL.lng],[ll.lat, ll.lng]], { weight: 2, opacity: 0.6 })
+  );
+  spokesLayer = L.layerGroup(lines).addTo(map);
+
+  // Circle (approx): radius = mean distance in meters
+  if (chkShowCircle.checked && result.stats.mean) {
+    circleLayer = L.circle([centerLL.lat, centerLL.lng], {
+      radius: result.stats.mean,
+      weight: 2,
+      opacity: 0.7,
+      fillOpacity: 0.05
+    }).addTo(map);
+  }
+
+  // Perpendicular bisector for 2 points
+  if (n === 2 && chkShowBisector.checked) {
+    const pA = pointsXY[0], pB = pointsXY[1];
+    const mid = { x: (pA.x+pB.x)/2, y: (pA.y+pB.y)/2 };
+
+    // Direction vector AB and its perpendicular
+    const dx = pB.x - pA.x;
+    const dy = pB.y - pA.y;
+
+    // if points coincide
+    const len = Math.hypot(dx, dy);
+    if (len > 1e-6) {
+      const nx = -dy / len; // unit normal
+      const ny =  dx / len;
+
+      // Make a long line segment across current map view
+      // approximate length: diagonal of current bounds in meters
+      const bounds = map.getBounds();
+      const nw = latLngToXY(bounds.getNorthWest().lat, bounds.getNorthWest().lng);
+      const se = latLngToXY(bounds.getSouthEast().lat, bounds.getSouthEast().lng);
+      const diag = Math.hypot(se.x - nw.x, se.y - nw.y);
+      const Lseg = diag * 1.2;
+
+      const p1 = { x: mid.x + nx*Lseg, y: mid.y + ny*Lseg };
+      const p2 = { x: mid.x - nx*Lseg, y: mid.y - ny*Lseg };
+      const ll1 = xyToLatLng(p1.x, p1.y);
+      const ll2 = xyToLatLng(p2.x, p2.y);
+
+      bisectorLayer = L.polyline([[ll1.lat,ll1.lng],[ll2.lat,ll2.lng]], {
+        dashArray: "6 6",
+        weight: 2,
+        opacity: 0.8
+      }).addTo(map);
+    }
+  }
+
+  // Popup text on center
+  const stats = result.stats;
+  const linesText = [];
+  linesText.push(`<b>결과 중심</b>`);
+  linesText.push(`<div class="mono">${centerLL.lat.toFixed(6)}, ${centerLL.lng.toFixed(6)}</div>`);
+  if (stats.type === "midpoint") {
+    linesText.push(`<div>2점: 대표 해 = 정중앙(수직이등분선 위는 모두 동일거리)</div>`);
+  } else {
+    linesText.push(`<div>유형: ${stats.type === "almost-circumcenter" ? "거의 동일거리(외심 근사)" : "최소제곱 근사"}</div>`);
+    linesText.push(`<div>평균 반경: <span class="mono">${stats.mean.toFixed(2)} m</span></div>`);
+    linesText.push(`<div>거리 표준편차(작을수록 동일거리): <span class="mono">${stats.std.toFixed(2)} m</span></div>`);
+    linesText.push(`<div>최대 편차: <span class="mono">${stats.maxDev.toFixed(2)} m</span></div>`);
+  }
+  centerMarker.bindPopup(linesText.join("")).openPopup();
+
+  // Status bar summary
+  if (stats.type === "midpoint") {
+    setStatus(`점 ${n}개. 2점이므로 정중앙을 표시했습니다. (수직이등분선 위는 두 점까지 거리가 동일)`);
+  } else {
+    const quality = stats.std <= 10 ? "매우 공평(≈10m 이내)" : (stats.std <= 50 ? "대체로 공평" : "동일거리와 차이 큼");
+    setStatus(`점 ${n}개. 중심 계산 완료: 평균반경 ${stats.mean.toFixed(1)}m, 표준편차 ${stats.std.toFixed(1)}m → ${quality}`);
+  }
+}
+
+function setStatus(mainLine) {
+  elStatus.innerHTML = `
+    <div><b>사용법</b>: 지도 클릭으로 점 추가 · 점을 드래그해서 이동 가능 · 점 2개 이상이면 결과 표시</div>
+    <div class="hint">${mainLine}</div>
+  `;
+}
+
+/* -----------------------
+   점 추가/삭제
+------------------------ */
+function renumberMarkers() {
+  pointMarkers.forEach((m, idx) => {
+    m.setIcon(makeNumberIcon(idx + 1));
+    m.setZIndexOffset(1000 + idx);
+  });
+}
+
+function makeNumberIcon(num) {
+  // 간단한 숫자 배지(HTML divIcon)
+  return L.divIcon({
+    className: "",
+    html: `
+      <div style="
+        width:28px;height:28px;border-radius:999px;
+        display:flex;align-items:center;justify-content:center;
+        background:#111;color:#fff;font-weight:800;font-size:13px;
+        border:2px solid #fff; box-shadow: 0 2px 10px rgba(0,0,0,.25);
+      ">${num}</div>
+    `,
+    iconSize: [28,28],
+    iconAnchor: [14,14]
+  });
+}
+
+function addPoint(latlng) {
+  const marker = L.marker(latlng, { draggable: true });
+  marker.on("drag", () => { if (chkRealtime.checked) updateResult(); });
+  marker.on("dragend", () => { if (chkRealtime.checked) updateResult(); });
+  marker.on("contextmenu", () => { // 우클릭 삭제
+    removeMarker(marker);
+  });
+  marker.addTo(map);
+  pointMarkers.push(marker);
+  renumberMarkers();
+  if (chkRealtime.checked) updateResult();
+  else setStatus(`점 ${pointMarkers.length}개. (실시간 계산이 꺼져있으면 체크를 켜거나, 점 드래그 후 체크를 켜주세요)`);
+}
+
+function removeMarker(marker) {
+  const idx = pointMarkers.indexOf(marker);
+  if (idx >= 0) {
+    map.removeLayer(marker);
+    pointMarkers.splice(idx, 1);
+    renumberMarkers();
+    if (chkRealtime.checked) updateResult();
+    else setStatus(`점 ${pointMarkers.length}개.`);
+  }
+}
+
+btnClear.addEventListener("click", () => {
+  pointMarkers.forEach(m => map.removeLayer(m));
+  pointMarkers.length = 0;
+  clearResultLayers();
+  setStatus(`전체 삭제 완료. 점을 다시 찍어주세요.`);
+});
+
+btnUndo.addEventListener("click", () => {
+  const last = pointMarkers.pop();
+  if (last) map.removeLayer(last);
+  renumberMarkers();
+  if (chkRealtime.checked) updateResult();
+  else setStatus(`점 ${pointMarkers.length}개.`);
+});
+
+chkShowCircle.addEventListener("change", () => { if (chkRealtime.checked) updateResult(); });
+chkShowBisector.addEventListener("change", () => { if (chkRealtime.checked) updateResult(); });
+
+/* -----------------------
+   지도 클릭: 점 추가
+------------------------ */
+map.on("click", (e) => addPoint(e.latlng));
+
+/* -----------------------
+   초기 안내
+------------------------ */
+setStatus("점 0개. 지도 클릭으로 점을 찍어보세요. (우클릭: 해당 점 삭제)");
+</script>
+</body>
+</html>
+
