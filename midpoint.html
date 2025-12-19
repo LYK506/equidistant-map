@@ -56,6 +56,123 @@
       line-height: 1.4;
       color: #222;
     }
+
+/* -----------------------
+   주소 검색 (Nominatim, OSM)
+------------------------ */
+const addrInput = document.getElementById("addrInput");
+const btnSearch = document.getElementById("btnSearch");
+const searchResults = document.getElementById("searchResults");
+
+// 간단한 디바운스(연속 타이핑 시 요청 폭주 방지)
+let searchTimer = null;
+
+function showResults(items) {
+  if (!items || items.length === 0) {
+    searchResults.style.display = "block";
+    searchResults.innerHTML = `<div style="padding:12px 14px; color:#666;">검색 결과가 없습니다.</div>`;
+    return;
+  }
+
+  searchResults.style.display = "block";
+  searchResults.innerHTML = items.map((it, idx) => `
+    <div data-idx="${idx}" style="
+      padding: 12px 14px;
+      border-top: ${idx === 0 ? "none" : "1px solid #f0f0f0"};
+      cursor: pointer;
+    ">
+      <div style="font-weight:700; margin-bottom:4px;">${escapeHtml(it.display_name)}</div>
+      <div style="color:#666; font-size:12px;">lat ${Number(it.lat).toFixed(6)}, lng ${Number(it.lon).toFixed(6)}</div>
+    </div>
+  `).join("");
+
+  // 클릭하면 점 추가 + 지도 이동
+  Array.from(searchResults.children).forEach((row) => {
+    row.addEventListener("click", () => {
+      const idx = Number(row.getAttribute("data-idx"));
+      const sel = items[idx];
+      const lat = Number(sel.lat);
+      const lng = Number(sel.lon);
+
+      map.setView([lat, lng], Math.max(map.getZoom(), 14));
+      addPoint(L.latLng(lat, lng));  // 기존 함수 재사용
+
+      searchResults.style.display = "none";
+    });
+  });
+}
+
+function hideResults() {
+  searchResults.style.display = "none";
+  searchResults.innerHTML = "";
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+async function nominatimSearch(q) {
+  const url = new URL("https://nominatim.openstreetmap.org/search");
+  url.searchParams.set("format", "json");
+  url.searchParams.set("limit", "6");
+  url.searchParams.set("q", q);
+  url.searchParams.set("accept-language", "ko"); // 결과를 한국어 우선으로
+
+  // Nominatim은 과도한 요청을 싫어함: 필요하면 1초에 1회 수준으로 사용
+  const res = await fetch(url.toString(), {
+    headers: {
+      "Accept": "application/json"
+    }
+  });
+
+  if (!res.ok) throw new Error("검색 요청 실패");
+  return await res.json();
+}
+
+async function runSearch() {
+  const q = addrInput.value.trim();
+  if (!q) return;
+
+  searchResults.style.display = "block";
+  searchResults.innerHTML = `<div style="padding:12px 14px; color:#666;">검색 중...</div>`;
+
+  try {
+    const items = await nominatimSearch(q);
+    showResults(items);
+  } catch (e) {
+    searchResults.style.display = "block";
+    searchResults.innerHTML = `<div style="padding:12px 14px; color:#c00;">검색에 실패했습니다. 잠시 후 다시 시도해주세요.</div>`;
+  }
+}
+
+// 버튼 클릭
+btnSearch.addEventListener("click", runSearch);
+
+// 엔터로 검색
+addrInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") runSearch();
+});
+
+// 타이핑 중 자동 검색(원하면 유지, 싫으면 이 블록 삭제)
+addrInput.addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  const q = addrInput.value.trim();
+  if (!q) { hideResults(); return; }
+  searchTimer = setTimeout(runSearch, 450);
+});
+
+// 바깥 클릭하면 결과 닫기
+document.addEventListener("click", (e) => {
+  const isIn = searchResults.contains(e.target) || addrInput.contains(e.target) || btnSearch.contains(e.target);
+  if (!isIn) hideResults();
+});
+
+    
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
     .hint { color: #666; }
     .sep { width: 1px; height: 28px; background: #eee; margin: 0 4px; }
@@ -415,4 +532,5 @@ setStatus("점 0개. 지도 클릭으로 점을 찍어보세요. (우클릭: 해
 </script>
 </body>
 </html>
+
 
