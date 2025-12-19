@@ -22,6 +22,7 @@
     html, body { height: 100%; margin: 0; }
     #app { height: 100%; display: grid; grid-template-rows: auto 1fr; }
     #topbar {
+      position: relative; /* ✅ 검색 결과 dropdown 위치를 위해 필요 */
       padding: 10px 12px;
       display: flex;
       gap: 10px;
@@ -39,6 +40,7 @@
       background: #fff;
       cursor: pointer;
       font-weight: 600;
+      white-space: nowrap;
     }
     .btn:hover { background: #f6f6f6; }
     .pill {
@@ -48,6 +50,7 @@
       background: #fafafa;
       font-size: 13px;
       color: #222;
+      white-space: nowrap;
     }
     #status {
       flex: 1;
@@ -56,136 +59,69 @@
       line-height: 1.4;
       color: #222;
     }
-
-/* -----------------------
-   주소 검색 (Nominatim, OSM)
------------------------- */
-const addrInput = document.getElementById("addrInput");
-const btnSearch = document.getElementById("btnSearch");
-const searchResults = document.getElementById("searchResults");
-
-// 간단한 디바운스(연속 타이핑 시 요청 폭주 방지)
-let searchTimer = null;
-
-function showResults(items) {
-  if (!items || items.length === 0) {
-    searchResults.style.display = "block";
-    searchResults.innerHTML = `<div style="padding:12px 14px; color:#666;">검색 결과가 없습니다.</div>`;
-    return;
-  }
-
-  searchResults.style.display = "block";
-  searchResults.innerHTML = items.map((it, idx) => `
-    <div data-idx="${idx}" style="
-      padding: 12px 14px;
-      border-top: ${idx === 0 ? "none" : "1px solid #f0f0f0"};
-      cursor: pointer;
-    ">
-      <div style="font-weight:700; margin-bottom:4px;">${escapeHtml(it.display_name)}</div>
-      <div style="color:#666; font-size:12px;">lat ${Number(it.lat).toFixed(6)}, lng ${Number(it.lon).toFixed(6)}</div>
-    </div>
-  `).join("");
-
-  // 클릭하면 점 추가 + 지도 이동
-  Array.from(searchResults.children).forEach((row) => {
-    row.addEventListener("click", () => {
-      const idx = Number(row.getAttribute("data-idx"));
-      const sel = items[idx];
-      const lat = Number(sel.lat);
-      const lng = Number(sel.lon);
-
-      map.setView([lat, lng], Math.max(map.getZoom(), 14));
-      addPoint(L.latLng(lat, lng));  // 기존 함수 재사용
-
-      searchResults.style.display = "none";
-    });
-  });
-}
-
-function hideResults() {
-  searchResults.style.display = "none";
-  searchResults.innerHTML = "";
-}
-
-function escapeHtml(s) {
-  return String(s)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-async function nominatimSearch(q) {
-  const url = new URL("https://nominatim.openstreetmap.org/search");
-  url.searchParams.set("format", "json");
-  url.searchParams.set("limit", "6");
-  url.searchParams.set("q", q);
-  url.searchParams.set("accept-language", "ko"); // 결과를 한국어 우선으로
-
-  // Nominatim은 과도한 요청을 싫어함: 필요하면 1초에 1회 수준으로 사용
-  const res = await fetch(url.toString(), {
-    headers: {
-      "Accept": "application/json"
-    }
-  });
-
-  if (!res.ok) throw new Error("검색 요청 실패");
-  return await res.json();
-}
-
-async function runSearch() {
-  const q = addrInput.value.trim();
-  if (!q) return;
-
-  searchResults.style.display = "block";
-  searchResults.innerHTML = `<div style="padding:12px 14px; color:#666;">검색 중...</div>`;
-
-  try {
-    const items = await nominatimSearch(q);
-    showResults(items);
-  } catch (e) {
-    searchResults.style.display = "block";
-    searchResults.innerHTML = `<div style="padding:12px 14px; color:#c00;">검색에 실패했습니다. 잠시 후 다시 시도해주세요.</div>`;
-  }
-}
-
-// 버튼 클릭
-btnSearch.addEventListener("click", runSearch);
-
-// 엔터로 검색
-addrInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") runSearch();
-});
-
-// 타이핑 중 자동 검색(원하면 유지, 싫으면 이 블록 삭제)
-addrInput.addEventListener("input", () => {
-  clearTimeout(searchTimer);
-  const q = addrInput.value.trim();
-  if (!q) { hideResults(); return; }
-  searchTimer = setTimeout(runSearch, 450);
-});
-
-// 바깥 클릭하면 결과 닫기
-document.addEventListener("click", (e) => {
-  const isIn = searchResults.contains(e.target) || addrInput.contains(e.target) || btnSearch.contains(e.target);
-  if (!isIn) hideResults();
-});
-
-    
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
     .hint { color: #666; }
     .sep { width: 1px; height: 28px; background: #eee; margin: 0 4px; }
-    .toggle { display: flex; align-items: center; gap: 8px; }
+    .toggle { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     input[type="checkbox"] { transform: scale(1.05); }
+
+    /* 검색 입력 */
+    #addrInput {
+      width: 260px;
+      max-width: 55vw;
+      padding: 8px 10px;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      outline: none;
+      font-size: 13px;
+    }
+    #addrInput:focus { border-color: #aaa; }
+
+    /* 검색 결과 dropdown */
+    #searchResults {
+      position: absolute;
+      top: 56px;
+      left: 12px;
+      right: 12px;
+      max-width: 720px;
+      background: #fff;
+      border: 1px solid #eee;
+      border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.12);
+      display: none;
+      overflow: hidden;
+      z-index: 9999;
+    }
+    .resultRow {
+      padding: 12px 14px;
+      cursor: pointer;
+      border-top: 1px solid #f0f0f0;
+    }
+    .resultRow:first-child { border-top: none; }
+    .resultRow:hover { background: #f7f7f7; }
+    .resultTitle { font-weight: 800; margin-bottom: 4px; font-size: 13px; }
+    .resultSub { color: #666; font-size: 12px; }
+
+    @media (max-width: 560px) {
+      #addrInput { width: 62vw; }
+      #searchResults { top: 108px; } /* topbar 줄바꿈 대응 */
+    }
   </style>
 </head>
+
 <body>
 <div id="app">
   <div id="topbar">
     <button class="btn" id="btnClear">전체 지우기</button>
     <button class="btn" id="btnUndo">마지막 점 삭제</button>
+
     <div class="sep"></div>
+
+    <!-- ✅ 주소 검색 UI -->
+    <div class="pill" style="display:flex; gap:8px; align-items:center;">
+      <input id="addrInput" type="text" placeholder="주소/장소 검색 (예: 연세대 공학관)" />
+      <button class="btn" id="btnSearch">검색</button>
+    </div>
 
     <div class="toggle">
       <label class="pill">
@@ -203,35 +139,29 @@ document.addEventListener("click", (e) => {
     </div>
 
     <div id="status">
-      <div><b>사용법</b>: 지도 클릭으로 점 추가 · 점을 드래그해서 이동 가능 · 점 2개 이상이면 결과 표시</div>
-      <div class="hint">주의: 3점 이상에서 “모든 점과 거리가 완전히 동일한 한 점(외심)”은 보통 존재하지 않아서, 이 도구는 <b>최소제곱으로 가장 비슷한 중심</b>을 계산합니다.</div>
+      <div><b>사용법</b>: 지도 클릭으로 점 추가 · 점 드래그로 이동 · 점 2개 이상이면 결과 표시 · (점 우클릭: 해당 점 삭제)</div>
+      <div class="hint">3점 이상에서 “완벽 동일거리 1점(외심)”은 보통 존재하지 않아서, 이 도구는 <b>최소제곱으로 가장 비슷한 중심</b>을 계산합니다.</div>
     </div>
+
+    <!-- ✅ 검색 결과 dropdown -->
+    <div id="searchResults"></div>
   </div>
 
   <div id="map"></div>
 </div>
 
 <script>
-/**
- * 이 파일 하나로 동작하는 MVP
- * - Leaflet + OSM 타일
- * - 지도 클릭으로 점 추가, 마커 드래그 가능
- * - 점 2개: midpoint + (옵션) 수직이등분선
- * - 점 3개 이상: 최소제곱 "동일거리 근사 중심" 계산 + (옵션) 근사 원 표시
- * - 결과: 중심 좌표, 평균 반경, 표준편차(=동일거리 정도) 표시
- */
-
 /* -----------------------
    지도 초기화
 ------------------------ */
-const map = L.map("map", { zoomControl: true }).setView([37.5665, 126.9780], 12); // 기본: 서울 시청
+const map = L.map("map", { zoomControl: true }).setView([37.5665, 126.9780], 12);
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 19,
   attribution: '&copy; OpenStreetMap contributors'
 }).addTo(map);
 
 /* -----------------------
-   상태/옵션
+   UI 요소
 ------------------------ */
 const elStatus = document.getElementById("status");
 const chkRealtime = document.getElementById("chkRealtime");
@@ -240,18 +170,21 @@ const chkShowBisector = document.getElementById("chkShowBisector");
 const btnClear = document.getElementById("btnClear");
 const btnUndo = document.getElementById("btnUndo");
 
+const addrInput = document.getElementById("addrInput");
+const btnSearch = document.getElementById("btnSearch");
+const searchResults = document.getElementById("searchResults");
+
 /* -----------------------
    레이어/마커 관리
 ------------------------ */
-const pointMarkers = []; // Leaflet markers
+const pointMarkers = [];
 let centerMarker = null;
 let circleLayer = null;
 let bisectorLayer = null;
-let spokesLayer = null; // center-to-points lines
+let spokesLayer = null;
 
 /* -----------------------
-   좌표 변환: lat/lng <-> Web Mercator meters
-   EPSG:3857
+   좌표 변환: lat/lng <-> Web Mercator meters (EPSG:3857)
 ------------------------ */
 const R = 6378137;
 function latLngToXY(lat, lng) {
@@ -267,7 +200,6 @@ function xyToLatLng(x, y) {
 
 /* -----------------------
    최소제곱 동일거리 중심 계산
-   pointsXY: [{x,y}, ...] (n>=2)
 ------------------------ */
 function bestEquidistantCenter(pointsXY) {
   const n = pointsXY.length;
@@ -283,7 +215,6 @@ function bestEquidistantCenter(pointsXY) {
   const x1 = p1.x, y1 = p1.y;
   const r1sq = x1*x1 + y1*y1;
 
-  // Normal equations components
   let Sxx = 0, Sxy = 0, Syy = 0;
   let Tx = 0, Ty = 0;
 
@@ -312,27 +243,31 @@ function bestEquidistantCenter(pointsXY) {
   const cx = invSxx*Tx + invSxy*Ty;
   const cy = invSxy*Tx + invSyy*Ty;
 
-  // Evaluate distances
   const dists = pointsXY.map(p => Math.hypot(p.x - cx, p.y - cy));
   const mean = dists.reduce((a,b)=>a+b,0)/n;
   const varr = dists.reduce((a,d)=>a+(d-mean)*(d-mean),0)/n;
   const std = Math.sqrt(varr);
   const maxDev = Math.max(...dists.map(d => Math.abs(d-mean)));
 
-  // “거의 동일거리” 임계값: 도시 내 만남지점 기준 10m 정도
-  const almost = std <= 10;
-
+  const almost = std <= 10; // 10m 이내면 "거의 동일"
   return { cx, cy, ok: true, stats: { type: almost ? "almost-circumcenter" : "least-squares", mean, std, maxDev } };
 }
 
 /* -----------------------
-   시각화: 중심/원/선/수직이등분선
+   결과 레이어 관리
 ------------------------ */
 function clearResultLayers() {
   if (centerMarker) { map.removeLayer(centerMarker); centerMarker = null; }
   if (circleLayer)  { map.removeLayer(circleLayer);  circleLayer = null; }
   if (bisectorLayer){ map.removeLayer(bisectorLayer); bisectorLayer = null; }
   if (spokesLayer)  { map.removeLayer(spokesLayer);  spokesLayer = null; }
+}
+
+function setStatus(mainLine) {
+  elStatus.innerHTML = `
+    <div><b>사용법</b>: 지도 클릭으로 점 추가 · 점 드래그로 이동 · 점 2개 이상이면 결과 표시 · (점 우클릭: 해당 점 삭제)</div>
+    <div class="hint">${mainLine}</div>
+  `;
 }
 
 function updateResult() {
@@ -344,7 +279,6 @@ function updateResult() {
     return;
   }
 
-  // markers -> latlng -> xy
   const latlngs = pointMarkers.map(m => m.getLatLng());
   const pointsXY = latlngs.map(ll => latLngToXY(ll.lat, ll.lng));
 
@@ -356,24 +290,15 @@ function updateResult() {
 
   const centerLL = xyToLatLng(result.cx, result.cy);
 
-  // Center marker
-  centerMarker = L.marker([centerLL.lat, centerLL.lng], {
-    draggable: false,
-    title: "계산된 중심"
-  }).addTo(map);
+  centerMarker = L.marker([centerLL.lat, centerLL.lng], { draggable: false, title: "계산된 중심" }).addTo(map);
 
-  // Lines from center to points (spokes)
-  spokesLayer = L.polyline(
-    latlngs.map(ll => [ll.lat, ll.lng]),
-    { opacity: 0 } // placeholder; we'll build separate lines group for clarity
-  );
-
+  // center-to-point lines
   const lines = latlngs.map(ll =>
     L.polyline([[centerLL.lat, centerLL.lng],[ll.lat, ll.lng]], { weight: 2, opacity: 0.6 })
   );
   spokesLayer = L.layerGroup(lines).addTo(map);
 
-  // Circle (approx): radius = mean distance in meters
+  // (approx) circle
   if (chkShowCircle.checked && result.stats.mean) {
     circleLayer = L.circle([centerLL.lat, centerLL.lng], {
       radius: result.stats.mean,
@@ -383,33 +308,29 @@ function updateResult() {
     }).addTo(map);
   }
 
-  // Perpendicular bisector for 2 points
+  // perpendicular bisector for 2 points
   if (n === 2 && chkShowBisector.checked) {
     const pA = pointsXY[0], pB = pointsXY[1];
     const mid = { x: (pA.x+pB.x)/2, y: (pA.y+pB.y)/2 };
 
-    // Direction vector AB and its perpendicular
     const dx = pB.x - pA.x;
     const dy = pB.y - pA.y;
-
-    // if points coincide
     const len = Math.hypot(dx, dy);
+
     if (len > 1e-6) {
-      const nx = -dy / len; // unit normal
+      const nx = -dy / len;
       const ny =  dx / len;
 
-      // Make a long line segment across current map view
-      // approximate length: diagonal of current bounds in meters
       const bounds = map.getBounds();
       const nw = latLngToXY(bounds.getNorthWest().lat, bounds.getNorthWest().lng);
       const se = latLngToXY(bounds.getSouthEast().lat, bounds.getSouthEast().lng);
       const diag = Math.hypot(se.x - nw.x, se.y - nw.y);
       const Lseg = diag * 1.2;
 
-      const p1 = { x: mid.x + nx*Lseg, y: mid.y + ny*Lseg };
-      const p2 = { x: mid.x - nx*Lseg, y: mid.y - ny*Lseg };
-      const ll1 = xyToLatLng(p1.x, p1.y);
-      const ll2 = xyToLatLng(p2.x, p2.y);
+      const q1 = { x: mid.x + nx*Lseg, y: mid.y + ny*Lseg };
+      const q2 = { x: mid.x - nx*Lseg, y: mid.y - ny*Lseg };
+      const ll1 = xyToLatLng(q1.x, q1.y);
+      const ll2 = xyToLatLng(q2.x, q2.y);
 
       bisectorLayer = L.polyline([[ll1.lat,ll1.lng],[ll2.lat,ll2.lng]], {
         dashArray: "6 6",
@@ -419,49 +340,32 @@ function updateResult() {
     }
   }
 
-  // Popup text on center
+  // popup + status
   const stats = result.stats;
-  const linesText = [];
-  linesText.push(`<b>결과 중심</b>`);
-  linesText.push(`<div class="mono">${centerLL.lat.toFixed(6)}, ${centerLL.lng.toFixed(6)}</div>`);
-  if (stats.type === "midpoint") {
-    linesText.push(`<div>2점: 대표 해 = 정중앙(수직이등분선 위는 모두 동일거리)</div>`);
-  } else {
-    linesText.push(`<div>유형: ${stats.type === "almost-circumcenter" ? "거의 동일거리(외심 근사)" : "최소제곱 근사"}</div>`);
-    linesText.push(`<div>평균 반경: <span class="mono">${stats.mean.toFixed(2)} m</span></div>`);
-    linesText.push(`<div>거리 표준편차(작을수록 동일거리): <span class="mono">${stats.std.toFixed(2)} m</span></div>`);
-    linesText.push(`<div>최대 편차: <span class="mono">${stats.maxDev.toFixed(2)} m</span></div>`);
-  }
-  centerMarker.bindPopup(linesText.join("")).openPopup();
+  const popupLines = [];
+  popupLines.push(`<b>결과 중심</b>`);
+  popupLines.push(`<div class="mono">${centerLL.lat.toFixed(6)}, ${centerLL.lng.toFixed(6)}</div>`);
 
-  // Status bar summary
   if (stats.type === "midpoint") {
+    popupLines.push(`<div>2점: 대표 해 = 정중앙(수직이등분선 위는 모두 동일거리)</div>`);
     setStatus(`점 ${n}개. 2점이므로 정중앙을 표시했습니다. (수직이등분선 위는 두 점까지 거리가 동일)`);
   } else {
+    popupLines.push(`<div>유형: ${stats.type === "almost-circumcenter" ? "거의 동일거리(외심 근사)" : "최소제곱 근사"}</div>`);
+    popupLines.push(`<div>평균 반경: <span class="mono">${stats.mean.toFixed(2)} m</span></div>`);
+    popupLines.push(`<div>표준편차(작을수록 동일): <span class="mono">${stats.std.toFixed(2)} m</span></div>`);
+    popupLines.push(`<div>최대 편차: <span class="mono">${stats.maxDev.toFixed(2)} m</span></div>`);
+
     const quality = stats.std <= 10 ? "매우 공평(≈10m 이내)" : (stats.std <= 50 ? "대체로 공평" : "동일거리와 차이 큼");
     setStatus(`점 ${n}개. 중심 계산 완료: 평균반경 ${stats.mean.toFixed(1)}m, 표준편차 ${stats.std.toFixed(1)}m → ${quality}`);
   }
-}
 
-function setStatus(mainLine) {
-  elStatus.innerHTML = `
-    <div><b>사용법</b>: 지도 클릭으로 점 추가 · 점을 드래그해서 이동 가능 · 점 2개 이상이면 결과 표시</div>
-    <div class="hint">${mainLine}</div>
-  `;
+  centerMarker.bindPopup(popupLines.join("")).openPopup();
 }
 
 /* -----------------------
    점 추가/삭제
 ------------------------ */
-function renumberMarkers() {
-  pointMarkers.forEach((m, idx) => {
-    m.setIcon(makeNumberIcon(idx + 1));
-    m.setZIndexOffset(1000 + idx);
-  });
-}
-
 function makeNumberIcon(num) {
-  // 간단한 숫자 배지(HTML divIcon)
   return L.divIcon({
     className: "",
     html: `
@@ -477,16 +381,27 @@ function makeNumberIcon(num) {
   });
 }
 
+function renumberMarkers() {
+  pointMarkers.forEach((m, idx) => {
+    m.setIcon(makeNumberIcon(idx + 1));
+    m.setZIndexOffset(1000 + idx);
+  });
+}
+
 function addPoint(latlng) {
   const marker = L.marker(latlng, { draggable: true });
+
   marker.on("drag", () => { if (chkRealtime.checked) updateResult(); });
   marker.on("dragend", () => { if (chkRealtime.checked) updateResult(); });
+
   marker.on("contextmenu", () => { // 우클릭 삭제
     removeMarker(marker);
   });
+
   marker.addTo(map);
   pointMarkers.push(marker);
   renumberMarkers();
+
   if (chkRealtime.checked) updateResult();
   else setStatus(`점 ${pointMarkers.length}개. (실시간 계산이 꺼져있으면 체크를 켜거나, 점 드래그 후 체크를 켜주세요)`);
 }
@@ -526,9 +441,107 @@ chkShowBisector.addEventListener("change", () => { if (chkRealtime.checked) upda
 map.on("click", (e) => addPoint(e.latlng));
 
 /* -----------------------
+   주소 검색 (Nominatim, OSM)
+   - 엔터/버튼 검색
+   - 타이핑 자동검색(디바운스)
+   - 결과 클릭하면 점 추가 + 지도 이동
+------------------------ */
+let searchTimer = null;
+
+function escapeHtml(s) {
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function hideResults() {
+  searchResults.style.display = "none";
+  searchResults.innerHTML = "";
+}
+
+function showResults(items) {
+  if (!items || items.length === 0) {
+    searchResults.style.display = "block";
+    searchResults.innerHTML = `<div class="resultRow"><div class="resultTitle" style="font-weight:700;">검색 결과가 없습니다.</div></div>`;
+    return;
+  }
+
+  searchResults.style.display = "block";
+  searchResults.innerHTML = items.map((it, idx) => `
+    <div class="resultRow" data-idx="${idx}">
+      <div class="resultTitle">${escapeHtml(it.display_name)}</div>
+      <div class="resultSub">lat ${Number(it.lat).toFixed(6)}, lng ${Number(it.lon).toFixed(6)}</div>
+    </div>
+  `).join("");
+
+  Array.from(searchResults.querySelectorAll(".resultRow")).forEach((row) => {
+    row.addEventListener("click", () => {
+      const idx = Number(row.getAttribute("data-idx"));
+      const sel = items[idx];
+      const lat = Number(sel.lat);
+      const lng = Number(sel.lon);
+
+      map.setView([lat, lng], Math.max(map.getZoom(), 14));
+      addPoint(L.latLng(lat, lng));
+      hideResults();
+    });
+  });
+}
+
+async function nominatimSearch(q) {
+  const url = new URL("https://nominatim.openstreetmap.org/search");
+  url.searchParams.set("format", "json");
+  url.searchParams.set("limit", "6");
+  url.searchParams.set("q", q);
+  url.searchParams.set("accept-language", "ko");
+
+  const res = await fetch(url.toString(), { headers: { "Accept": "application/json" } });
+  if (!res.ok) throw new Error("검색 요청 실패");
+  return await res.json();
+}
+
+async function runSearch() {
+  const q = addrInput.value.trim();
+  if (!q) { hideResults(); return; }
+
+  searchResults.style.display = "block";
+  searchResults.innerHTML = `<div class="resultRow"><div class="resultTitle" style="font-weight:700;">검색 중...</div></div>`;
+
+  try {
+    const items = await nominatimSearch(q);
+    showResults(items);
+  } catch (e) {
+    searchResults.style.display = "block";
+    searchResults.innerHTML = `<div class="resultRow"><div class="resultTitle" style="font-weight:700;color:#c00;">검색에 실패했습니다. 잠시 후 다시 시도해주세요.</div></div>`;
+  }
+}
+
+btnSearch.addEventListener("click", runSearch);
+
+addrInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") runSearch();
+});
+
+addrInput.addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  const q = addrInput.value.trim();
+  if (!q) { hideResults(); return; }
+  searchTimer = setTimeout(runSearch, 450);
+});
+
+// 바깥 클릭 시 결과 닫기
+document.addEventListener("click", (e) => {
+  const inside = searchResults.contains(e.target) || addrInput.contains(e.target) || btnSearch.contains(e.target);
+  if (!inside) hideResults();
+});
+
+/* -----------------------
    초기 안내
 ------------------------ */
-setStatus("점 0개. 지도 클릭으로 점을 찍어보세요. (우클릭: 해당 점 삭제)");
+setStatus("점 0개. 지도 클릭으로 점을 찍어보세요. (점 우클릭: 해당 점 삭제)");
 </script>
 </body>
 </html>
